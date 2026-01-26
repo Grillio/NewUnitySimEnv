@@ -1,0 +1,10 @@
+timestamp,message
+0.00,SIM_START
+0.02,"[New Task] Move patient from C-45 to XRAY, priority Stat (Day 1 0:30)"
+11.62,"[New Task] Move patient from C-28 to CT, priority Stat (Day 1 0:42)"
+13.06,"[New Task] Move patient from C-28 to UA5W, priority Stat (Day 1 0:48)"
+16.01,"[New Task] Move patient from C-45 to UA5W, priority Normal (Day 1 1:00)"
+18.82,"[New Task] Move patient from C-45 to UA5W, priority Stat (Day 1 1:12)"
+20.02,"[New Task] Move patient from C-52 to XRAY, priority Stat (Day 1 1:17)"
+22.18,"[New Task] Move patient from C-33 to UA5W, priority Normal (Day 1 1:26)"
+23.31,SIM_END
