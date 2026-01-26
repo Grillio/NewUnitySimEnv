@@ -1,0 +1,11 @@
+timestamp,message
+0.00,SIM_START
+0.01,"[Sequencer] New Task, id_000, C-45, XRAY, Stat"
+3.03,"[Sequencer] New Task, id_001, C-28, CT, Stat"
+4.48,"[Sequencer] New Task, id_002, C-28, UA5W, Stat"
+7.37,"[Sequencer] New Task, id_003, C-45, UA5W, Normal"
+10.27,"[Sequencer] New Task, id_004, C-45, UA5W, Stat"
+11.47,"[Sequencer] New Task, id_005, C-52, XRAY, Stat"
+13.67,"[Sequencer] New Task, id_006, C-33, UA5W, Normal"
+15.27,"[Sequencer] New Task, id_007, C-33, XRAY, Normal"
+16.14,SIM_END

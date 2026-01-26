@@ -141,6 +141,7 @@ public sealed class LoggerSubSys : MonoBehaviour
         // Use SequencerSubSys fileName (base name) as folder name.
         // Fall back to something safe if missing.
         string name = (sequencerSubSys != null) ? sequencerSubSys.fileName : null;
+        
 
         if (!string.IsNullOrWhiteSpace(name))
             return SanitizeForFolderName(name);

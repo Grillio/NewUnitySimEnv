@@ -261,6 +261,16 @@ public sealed class SequencerSubSys : MonoBehaviour
     // Loading
     // -----------------------------
 
+    /// <summary>
+/// Returns the current simulation time formatted as HH:MM (24-hour clock).
+/// Example: "14:37"
+/// </summary>
+public string GetCurrentTimeString()
+{
+    return $"{currentHour:00}:{currentMinute:00}";
+}
+
+
     private void LoadSequence()
     {
         string path = GetSequencePath(fileName);

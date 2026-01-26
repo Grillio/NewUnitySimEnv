@@ -1,0 +1,5 @@
+timestamp,message
+0.00,SIM_START
+0.01,"[Sequencer] New Task, id_000, C-45, XRAY, Stat"
+3.07,"[Sequencer] New Task, id_001, C-28, CT, Stat"
+3.41,SIM_END
