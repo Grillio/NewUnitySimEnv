@@ -12,12 +12,9 @@ public class LocationData : MonoBehaviour
     [SerializeField] private string locationCodeName;
 
     [Tooltip("The world object agents should navigate to.")]
-    [SerializeField] private GameObject targetObject;
+    [SerializeField] public GameObject targetObject;
 
-    [Header("Item At Location")]
-
-    [Tooltip("The item currently at this location.")]
-    [SerializeField] private GameObject targetItem;
+    [SerializedField] public int floor;
 
     private void Start()
     {
