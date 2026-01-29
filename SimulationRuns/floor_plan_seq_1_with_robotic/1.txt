@@ -1,0 +1,2 @@
+timestamp,message
+87.46,SIM_END

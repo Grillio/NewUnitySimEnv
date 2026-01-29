@@ -1,0 +1,3 @@
+timestamp,message
+0.00,SIM_START
+65326.48,SIM_END

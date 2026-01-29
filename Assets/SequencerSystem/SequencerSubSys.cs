@@ -5,48 +5,71 @@ using System.IO;
 using UnityEngine;
 
 /// <summary>
-/// SequencerSubSys
-/// - Loads ProjectRoot/Sequences/<fileName>.csv
-/// - CSV rows: time, fromArea, toArea, priority
-///   time supports HH:MM or HH:MM:SS
-/// - Runs a fixed-step simulation clock driven by realtime * timingScale
-/// - Fires NewTask when events are due
+/// SequencerSubSys (Deterministic / Frame-Driven)
 ///
-/// Inspector is intentionally minimal:
-///   ✅ fileName
-///   ✅ autoBegin
-///   ✅ timingScale
-///   ✅ live clock (read-only display fields)
+/// Loads: ProjectRoot/Sequences/<fileName>.csv
+/// CSV columns: time, fromArea, toArea, priority
 ///
-/// CHANGE REQUEST:
-/// - Do NOT append Day/Hour/Minute to log output
-/// - Emit: "[Sequencer] New Task, id_000, C-33, CT, Stat"
-/// - Assign each row a stable identity when loading (id_000, id_001, ...)
+/// TIME FORMAT (CSV):
+/// - If ClockDisplayMode == TimeOfDay_HHMM:
+///     time MUST be "HH:MM" or "HH:MM:SS" (time-of-day)
+///     Events are scheduled relative to the first row (supports midnight rollover).
+///
+/// - If ClockDisplayMode == Elapsed_MMSS:
+///     time MUST be "MM:SS" (elapsed)
+///     Events are scheduled as absolute elapsed seconds since sequence start.
+///
+/// KEY BEHAVIOR (YOUR REQUEST):
+/// - Simulation time is NOT based on realtime or FPS.
+/// - Each rendered Unity frame advances the simulation by 'secondsPerFrame'.
+///   Examples:
+///     secondsPerFrame = 1.0   -> 1 frame = 1 sim second
+///     secondsPerFrame = 0.1   -> 10 frames = 1 sim second
+///     secondsPerFrame = 0.005 -> 200 frames = 1 sim second
+/// - Works perfectly with Pause + Step (each Step advances exactly one frame).
+///
+/// LOG REQUIREMENT:
+/// - Emit exactly: "[Sequencer] New Task, id_000, C-33, CT, Stat"
+/// - No Day/Hour/Minute appended in the log.
+/// - IDs are stable based on load order after sorting: id_000, id_001, ...
 /// </summary>
 public sealed class SequencerSubSys : MonoBehaviour
 {
     public static SequencerSubSys I { get; private set; }
 
     // -----------------------------
-    // Inspector: ONLY these show
+    // Inspector
     // -----------------------------
 
+    public enum ClockDisplayMode
+    {
+        TimeOfDay_HHMM, // CSV expects HH:MM or HH:MM:SS (time-of-day)
+        Elapsed_MMSS    // CSV expects MM:SS (elapsed)
+    }
+
     [Header("Sequence File (ProjectRoot/Sequences/)")]
-    [Tooltip("Base name WITHOUT extension. Example: 'HospitalRunA' -> loads HospitalRunA.csv")]
+    [Tooltip("Base name WITHOUT extension. Example: 'Sequence1' -> loads Sequence1.csv")]
     [SerializeField] public string fileName = "Sequence1";
 
     [Header("Playback")]
     [SerializeField] private bool autoBegin = true;
 
-    [Header("Timing")]
-    [Tooltip("Sim seconds per real second. Example: 4000 means 1 real second = 4000 sim seconds.")]
-    [Min(0.0001f)]
-    [SerializeField] private float timingScale = 1.0f;
+    [Header("Deterministic Simulation (Frame-Driven)")]
+    [Tooltip("How many SIM seconds pass per rendered frame.\n" +
+             "1.0 => 1 frame = 1 sec\n" +
+             "0.1 => 10 frames = 1 sec\n" +
+             "0.005 => 200 frames = 1 sec")]
+    [Min(0.000001f)]
+    [SerializeField] public float secondsPerFrame = 1f;
+
+    [Header("CSV Time Mode / Clock Display")]
+    [SerializeField] private ClockDisplayMode clockDisplayMode = ClockDisplayMode.TimeOfDay_HHMM;
 
     [Header("Time Clock (read-only display)")]
-    [SerializeField] private int currentDay = 1;     // 1-based
-    [SerializeField] private int currentHour = 0;    // 0-23
-    [SerializeField] private int currentMinute = 0;  // 0-59
+    [SerializeField] private int currentDay = 1;            // meaningful in TimeOfDay mode
+    [SerializeField] private int currentHourOrMinute = 0;   // TOD: hour, Elapsed: minutes
+    [SerializeField] private int currentMinuteOrSecond = 0; // TOD: minute, Elapsed: seconds (integer)
+    [SerializeField] private float currentSecondFloat = 0f; // seconds-with-fraction within the minute (or elapsed seconds component)
     [SerializeField] private string clockText = "Day 1 00:00";
 
     // -----------------------------
@@ -54,20 +77,28 @@ public sealed class SequencerSubSys : MonoBehaviour
     // -----------------------------
 
     [HideInInspector] [Min(0f)]
-    [Tooltip("Optional real-time delay before simulation starts (seconds).")]
+    [Tooltip("Optional delay BEFORE simulation begins, measured in SIM seconds (not real seconds).")]
     [SerializeField] private float startOffsetSeconds = 0f;
 
     [HideInInspector] [Min(0.000001f)]
-    [Tooltip("Fixed simulation step in SIM seconds. Smaller = smoother sim driver but more CPU.")]
+    [Tooltip("Internal simulation step (SIM seconds). Smaller = finer stepping but more CPU.\n" +
+             "If you want EXACTLY one step per frame, set simStepSeconds == secondsPerFrame.\n" +
+             "Otherwise, sim will accumulate budget and step multiple times per frame if needed.")]
     [SerializeField] private float simStepSeconds = 0.1f;
 
     [HideInInspector] [Min(1)]
-    [Tooltip("Safety cap: maximum fixed-steps processed per Unity frame (prevents lock-ups).")]
+    [Tooltip("Safety cap: maximum sim steps processed per Unity frame (prevents lock-ups).")]
     [SerializeField] private int maxStepsPerFrame = 20000;
 
     [HideInInspector]
-    [Tooltip("If true, clock starts at the first row's HH:MM time-of-day.")]
+    [Tooltip("TimeOfDay mode only: if true, displayed clock starts at the first row's time-of-day.")]
     [SerializeField] private bool anchorClockToFirstRowTime = true;
+
+    /// <summary>
+    /// Back-compat for other scripts that referenced SequencerSubSys.TimingScale.
+    /// In this deterministic model, there is no realtime scaling; return 1.
+    /// </summary>
+    public float TimingScale => 1f;
 
     // -----------------------------
     // Events
@@ -84,7 +115,7 @@ public sealed class SequencerSubSys : MonoBehaviour
 
     private struct SeqEvent
     {
-        public float t; // seconds since sequence start (RELATIVE)
+        public float t; // seconds since sequence start (RELATIVE for TOD mode, ABS elapsed for Elapsed mode)
         public string id;
         public string fromArea;
         public string toArea;
@@ -100,10 +131,10 @@ public sealed class SequencerSubSys : MonoBehaviour
     private double _simTime;
     private double _simBudget;
 
+    private double _startDelayBudget; // SIM seconds remaining before simulation begins
+
     private int _anchorTodSeconds;
     private bool _hasAnchor;
-
-    private float _lastRealtime;
 
     private const int SecondsPerMinute = 60;
     private const int SecondsPerHour = 3600;
@@ -120,6 +151,7 @@ public sealed class SequencerSubSys : MonoBehaviour
             Destroy(gameObject);
             return;
         }
+
         I = this;
 
         LoadSequence();
@@ -140,6 +172,30 @@ public sealed class SequencerSubSys : MonoBehaviour
     // Public API
     // -----------------------------
 
+    /// <summary>
+    /// Returns a display string based on the selected clock display mode.
+    /// - TimeOfDay_HHMM -> "HH:MM"
+    /// - Elapsed_MMSS   -> "MM:SS"
+    /// </summary>
+    public string GetCurrentTimeString()
+    {
+        if (clockDisplayMode == ClockDisplayMode.Elapsed_MMSS)
+        {
+            int whole = Mathf.FloorToInt((float)Math.Max(0.0, _simTime));
+            int mm = whole / SecondsPerMinute;
+            int ss = whole % SecondsPerMinute;
+            return $"{mm:00}:{ss:00}";
+        }
+
+        return $"{currentHourOrMinute:00}:{currentMinuteOrSecond:00}";
+    }
+
+    /// <summary>Fractional seconds component for display/debug.</summary>
+    public float CurrentSecondFloat => currentSecondFloat;
+
+    /// <summary>Current simulation time in seconds since Begin().</summary>
+    public double SimTimeSeconds => _simTime;
+
     public void Begin()
     {
         if (!_loaded)
@@ -154,11 +210,7 @@ public sealed class SequencerSubSys : MonoBehaviour
         _simTime = 0.0;
         _simBudget = 0.0;
 
-        _lastRealtime = Time.realtimeSinceStartup;
-
-        // Implement start offset by moving lastRealtime forward.
-        if (startOffsetSeconds > 0f)
-            _lastRealtime += startOffsetSeconds;
+        _startDelayBudget = Math.Max(0.0, startOffsetSeconds);
 
         UpdateInspectorClock(_simTime);
     }
@@ -181,7 +233,7 @@ public sealed class SequencerSubSys : MonoBehaviour
     }
 
     // -----------------------------
-    // Main loop
+    // Main loop (deterministic)
     // -----------------------------
 
     private void Update()
@@ -189,21 +241,29 @@ public sealed class SequencerSubSys : MonoBehaviour
         if (!_running) return;
         if (_eventIndex >= _events.Count) { _running = false; return; }
 
-        float now = Time.realtimeSinceStartup;
-        float realDt = now - _lastRealtime;
-        _lastRealtime = now;
-
-        // Waiting for startOffsetSeconds
-        if (realDt <= 0f)
+        double dtSim = Math.Max(0.0, (double)secondsPerFrame);
+        if (dtSim <= 0.0)
         {
             UpdateInspectorClock(_simTime);
             return;
         }
 
-        // Avoid hitch explosions
-        realDt = Mathf.Clamp(realDt, 0f, 0.25f);
+        // Start delay (SIM seconds)
+        if (_startDelayBudget > 0.0)
+        {
+            _startDelayBudget -= dtSim;
+            if (_startDelayBudget > 0.0)
+            {
+                UpdateInspectorClock(_simTime);
+                return;
+            }
 
-        _simBudget += (double)realDt * (double)Mathf.Max(0.0001f, timingScale);
+            // carry remainder into budget if we overshot the delay
+            dtSim = -_startDelayBudget;
+            _startDelayBudget = 0.0;
+        }
+
+        _simBudget += dtSim;
 
         int steps = 0;
         double step = Math.Max(0.000001, (double)simStepSeconds);
@@ -218,12 +278,7 @@ public sealed class SequencerSubSys : MonoBehaviour
         }
 
         if (steps >= maxStepsPerFrame)
-        {
-            Debug.LogWarning(
-                $"[SequencerSubSys] Hit maxStepsPerFrame={maxStepsPerFrame}. Sim is falling behind. " +
-                $"Consider increasing simStepSeconds or lowering timingScale."
-            );
-        }
+            Debug.LogWarning($"[SequencerSubSys] Hit maxStepsPerFrame={maxStepsPerFrame}. Sim is falling behind.");
 
         UpdateInspectorClock(_simTime);
     }
@@ -244,32 +299,17 @@ public sealed class SequencerSubSys : MonoBehaviour
                 Debug.LogError($"[SequencerSubSys] Task subscriber threw: {ex}");
             }
 
-            // Log format requested (NO day/hour/minute)
-            // "[Sequencer] New Task, id_000, C-33, CT, Stat"
+            // EXACT log format required
             if (LoggerSubSys.I != null)
-            {
                 LoggerSubSys.I.LogMsg($"[Sequencer] New Task, {e.id}, {e.fromArea}, {e.toArea}, {e.priority}");
-            }
             else
-            {
                 Debug.Log($"[Sequencer] New Task, {e.id}, {e.fromArea}, {e.toArea}, {e.priority}");
-            }
         }
     }
 
     // -----------------------------
     // Loading
     // -----------------------------
-
-    /// <summary>
-/// Returns the current simulation time formatted as HH:MM (24-hour clock).
-/// Example: "14:37"
-/// </summary>
-public string GetCurrentTimeString()
-{
-    return $"{currentHour:00}:{currentMinute:00}";
-}
-
 
     private void LoadSequence()
     {
@@ -291,7 +331,74 @@ public string GetCurrentTimeString()
             return;
         }
 
-        // Parse absolute time-of-day seconds first, then convert to relative seconds from first row (with day rollover).
+        _events.Clear();
+
+        if (clockDisplayMode == ClockDisplayMode.Elapsed_MMSS)
+            LoadElapsed_MMSS(lines);
+        else
+            LoadTimeOfDay_HHMM(lines);
+
+        _eventIndex = 0;
+        _loaded = _events.Count > 0;
+
+        if (!_loaded)
+            Debug.LogError("[SequencerSubSys] No valid rows found.");
+    }
+
+    private void LoadElapsed_MMSS(string[] lines)
+    {
+        var parsed = new List<(int elapsedSec, string from, string to, string priority)>(lines.Length);
+
+        for (int i = 0; i < lines.Length; i++)
+        {
+            string raw = lines[i];
+            if (string.IsNullOrWhiteSpace(raw)) continue;
+
+            raw = raw.Trim();
+            if (raw.StartsWith("#")) continue;
+
+            string[] parts = raw.Split(',');
+            if (parts.Length < 4) continue;
+
+            string tStr = parts[0].Trim();
+            string fromArea = parts[1].Trim();
+            string toArea = parts[2].Trim();
+            string priority = parts[3].Trim();
+
+            if (!TryParseElapsed_MMSS(tStr, out int elapsed))
+            {
+                Debug.LogWarning($"[SequencerSubSys] (Elapsed) Skipping bad time '{tStr}' on line {i + 1} (expected MM:SS).");
+                continue;
+            }
+
+            parsed.Add((elapsed, fromArea, toArea, priority));
+        }
+
+        if (parsed.Count == 0) return;
+
+        parsed.Sort((a, b) => a.elapsedSec.CompareTo(b.elapsedSec));
+
+        _anchorTodSeconds = 0;
+        _hasAnchor = false;
+
+        for (int i = 0; i < parsed.Count; i++)
+        {
+            string id = $"id_{i:000}";
+            _events.Add(new SeqEvent
+            {
+                t = parsed[i].elapsedSec,
+                id = id,
+                fromArea = parsed[i].from,
+                toArea = parsed[i].to,
+                priority = parsed[i].priority
+            });
+        }
+
+        Debug.Log($"[SequencerSubSys] Loaded {_events.Count} events (Elapsed MM:SS). MaxT={parsed[^1].elapsedSec}s");
+    }
+
+    private void LoadTimeOfDay_HHMM(string[] lines)
+    {
         var parsedAbs = new List<(int todSec, string from, string to, string priority)>(lines.Length);
 
         for (int i = 0; i < lines.Length; i++)
@@ -310,29 +417,21 @@ public string GetCurrentTimeString()
             string toArea = parts[2].Trim();
             string priority = parts[3].Trim();
 
-            if (!TryParseTimeOfDayToSeconds(tStr, out int todSeconds))
+            if (!TryParseTimeOfDay_HHMMSS(tStr, out int todSeconds))
             {
-                Debug.LogWarning($"[SequencerSubSys] Skipping bad time '{tStr}' on line {i + 1}");
+                Debug.LogWarning($"[SequencerSubSys] (TimeOfDay) Skipping bad time '{tStr}' on line {i + 1} (expected HH:MM or HH:MM:SS).");
                 continue;
             }
 
             parsedAbs.Add((todSeconds, fromArea, toArea, priority));
         }
 
-        if (parsedAbs.Count == 0)
-        {
-            Debug.LogError("[SequencerSubSys] No valid rows found.");
-            _loaded = false;
-            return;
-        }
+        if (parsedAbs.Count == 0) return;
 
-        // Keep time ordering; handle midnight rollover after sorting.
         parsedAbs.Sort((a, b) => a.todSec.CompareTo(b.todSec));
 
         _anchorTodSeconds = parsedAbs[0].todSec;
         _hasAnchor = true;
-
-        _events.Clear();
 
         int prevAbs = _anchorTodSeconds;
         int dayOffset = 0;
@@ -341,14 +440,12 @@ public string GetCurrentTimeString()
         {
             int abs = parsedAbs[i].todSec;
 
-            // Rollover: 23:59 then 00:05 => next day
             if (i > 0 && abs < prevAbs)
                 dayOffset += SecondsPerDay;
 
             float rel = (abs - _anchorTodSeconds) + dayOffset;
 
             string id = $"id_{i:000}";
-
             _events.Add(new SeqEvent
             {
                 t = rel,
@@ -361,9 +458,6 @@ public string GetCurrentTimeString()
             prevAbs = abs;
         }
 
-        _eventIndex = 0;
-        _loaded = true;
-
         Debug.Log($"[SequencerSubSys] Loaded {_events.Count} events. Anchor TOD={SecondsToHHMM(_anchorTodSeconds)}");
     }
 
@@ -375,7 +469,30 @@ public string GetCurrentTimeString()
         return Path.Combine(seqDir, $"{baseName}.csv");
     }
 
-    private static bool TryParseTimeOfDayToSeconds(string s, out int todSeconds)
+    // -----------------------------
+    // Time Parsing
+    // -----------------------------
+
+    private static bool TryParseElapsed_MMSS(string s, out int elapsedSeconds)
+    {
+        elapsedSeconds = 0;
+        if (string.IsNullOrWhiteSpace(s)) return false;
+
+        s = s.Trim();
+        var tokens = s.Split(':');
+        if (tokens.Length != 2) return false;
+
+        if (!int.TryParse(tokens[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int mm)) return false;
+        if (!int.TryParse(tokens[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int ss)) return false;
+
+        if (mm < 0) return false;
+        if (ss < 0 || ss > 59) return false;
+
+        elapsedSeconds = mm * SecondsPerMinute + ss;
+        return true;
+    }
+
+    private static bool TryParseTimeOfDay_HHMMSS(string s, out int todSeconds)
     {
         todSeconds = 0;
         if (string.IsNullOrWhiteSpace(s)) return false;
@@ -387,6 +504,7 @@ public string GetCurrentTimeString()
         {
             if (!int.TryParse(tokens[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int hh)) return false;
             if (!int.TryParse(tokens[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int mm)) return false;
+
             if (hh < 0 || hh > 23) return false;
             if (mm < 0 || mm > 59) return false;
 
@@ -399,6 +517,7 @@ public string GetCurrentTimeString()
             if (!int.TryParse(tokens[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out int hh)) return false;
             if (!int.TryParse(tokens[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out int mm)) return false;
             if (!int.TryParse(tokens[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out int ss)) return false;
+
             if (hh < 0 || hh > 23) return false;
             if (mm < 0 || mm > 59) return false;
             if (ss < 0 || ss > 59) return false;
@@ -416,23 +535,44 @@ public string GetCurrentTimeString()
 
     private void UpdateInspectorClock(double simSeconds)
     {
-        GetClockFromSimSeconds(simSeconds, out currentDay, out currentHour, out currentMinute);
-        clockText = $"Day {currentDay} {currentHour}:{currentMinute:00}";
-    }
+        double s = Math.Max(0.0, simSeconds);
+        int whole = (int)Math.Floor(s);
+        double frac = s - whole;
 
-    private void GetClockFromSimSeconds(double simSeconds, out int day, out int hour, out int minute)
-    {
-        int total = Mathf.FloorToInt((float)Math.Max(0.0, simSeconds));
+        if (clockDisplayMode == ClockDisplayMode.Elapsed_MMSS)
+        {
+            int mm = whole / SecondsPerMinute;
+            int ss = whole % SecondsPerMinute;
 
-        day = (total / SecondsPerDay) + 1;
-        int intoDay = total % SecondsPerDay;
+            currentDay = 0;
+            currentHourOrMinute = mm;
+            currentMinuteOrSecond = ss;
+
+            currentSecondFloat = (float)(ss + frac); // 0..59.999
+
+            clockText = $"{mm:00}:{ss:00} ({currentSecondFloat:0.000}s)";
+            return;
+        }
+
+        // Time-of-day display
+        int day = (whole / SecondsPerDay) + 1;
+        int intoDay = whole % SecondsPerDay;
 
         int tod = (anchorClockToFirstRowTime && _hasAnchor)
             ? (_anchorTodSeconds + intoDay) % SecondsPerDay
             : intoDay;
 
-        hour = tod / SecondsPerHour;
-        minute = (tod % SecondsPerHour) / SecondsPerMinute;
+        int hh = tod / SecondsPerHour;
+        int mm2 = (tod % SecondsPerHour) / SecondsPerMinute;
+        int ss2 = tod % SecondsPerMinute;
+
+        currentDay = day;
+        currentHourOrMinute = hh;
+        currentMinuteOrSecond = mm2;
+
+        currentSecondFloat = (float)(ss2 + frac); // 0..59.999
+
+        clockText = $"Day {day} {hh:00}:{mm2:00} ({currentSecondFloat:0.000}s)";
     }
 
     private static string SecondsToHHMM(int todSeconds)
@@ -440,6 +580,6 @@ public string GetCurrentTimeString()
         todSeconds = ((todSeconds % SecondsPerDay) + SecondsPerDay) % SecondsPerDay;
         int hh = todSeconds / SecondsPerHour;
         int mm = (todSeconds % SecondsPerHour) / SecondsPerMinute;
-        return $"{hh}:{mm:00}";
+        return $"{hh:00}:{mm:00}";
     }
 }

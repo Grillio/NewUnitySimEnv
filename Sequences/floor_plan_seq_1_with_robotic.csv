@@ -1,4 +1,3 @@
-time,fromArea,toArea,priority,roboticCompatible
 06:15,R-2,R-1,Stat,false
 06:23,R-4,R-3,Normal,true
 06:38,D-4,D-1,Normal,false

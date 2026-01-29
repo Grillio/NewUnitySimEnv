@@ -1,0 +1,19 @@
+timestamp,message
+0.00,SIM_START
+0.01,"[Sequencer] New Task, id_000, R-2, R-1, Stat"
+3.42,"[Sequencer] New Task, id_001, R-4, R-3, Normal"
+8.68,"[Sequencer] New Task, id_002, D-4, D-1, Normal"
+13.52,"[Sequencer] New Task, id_003, R-7, R-1, Normal"
+15.59,"[Sequencer] New Task, id_004, R-4, R-5, Normal"
+20.09,"[Sequencer] New Task, id_005, R-4, D-4, Stat"
+22.90,"[Sequencer] New Task, id_006, R-8, D-3, Stat"
+28.84,"[Sequencer] New Task, id_007, R-1, R-4, Stat"
+32.30,"[Sequencer] New Task, id_008, R-5, R-3, Normal"
+38.38,"[Sequencer] New Task, id_009, R-6, R-2, Normal"
+42.30,"[Sequencer] New Task, id_010, R-5, R-1, Stat"
+46.83,"[Sequencer] New Task, id_011, R-2, R-8, Normal"
+51.62,"[Sequencer] New Task, id_012, R-5, D-4, Stat"
+56.65,"[Sequencer] New Task, id_013, R-4, R-2, Normal"
+61.55,"[Sequencer] New Task, id_014, R-4, R-6, Normal"
+67.33,"[Sequencer] New Task, id_015, R-4, R-2, Stat"
+69.84,SIM_END

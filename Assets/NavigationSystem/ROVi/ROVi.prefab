@@ -12,7 +12,7 @@ GameObject:
   - component: {fileID: 7179349965927543458}
   - component: {fileID: 7238550320640372040}
   - component: {fileID: 3763256100933920443}
-  m_Layer: 0
+  m_Layer: 6
   m_Name: ROVi
   m_TagString: Untagged
   m_Icon: {fileID: 0}

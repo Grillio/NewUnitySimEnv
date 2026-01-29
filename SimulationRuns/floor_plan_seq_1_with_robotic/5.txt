@@ -1,0 +1,2 @@
+timestamp,message
+430.17,SIM_END
